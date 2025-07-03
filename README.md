@@ -53,6 +53,7 @@ for result in asr.stream_from_file("audio.wav"):
 
 ### Python API
 
+#### Streaming from File
 ```python
 from ViStreamASR import StreamingASR
 
@@ -61,6 +62,21 @@ asr = StreamingASR()
 
 # Process audio file
 for result in asr.stream_from_file("audio.wav"):
+    if result['partial']:
+        print(f"Partial: {result['text']}")
+    if result['final']:
+        print(f"Final: {result['text']}")
+```
+
+#### Streaming from Microphone
+```python
+from ViStreamASR import StreamingASR
+
+# Initialize ASR
+asr = StreamingASR()
+
+# Process audio file
+for result in asr.stream_from_microphone(duration_seconds=10):
     if result['partial']:
         print(f"Partial: {result['text']}")
     if result['final']:

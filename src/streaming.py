@@ -13,6 +13,7 @@ from typing import Generator, Dict, Any, Optional
 from pathlib import Path
 import sys
 import numpy as np
+import sounddevice as sd
 
 # Handle imports for both installed package and development mode
 try:
@@ -186,25 +187,81 @@ class StreamingASR:
             print(f"{symbols['ruler']}  Total time: {total_time:.2f}s")
             print(f"{symbols['check']} �� RTF: {rtf:.2f}x")
             print(f"{symbols['check']} ⚡ Speedup: {duration/total_time:.1f}x")
-    
+
     def stream_from_microphone(self, duration_seconds: Optional[float] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Stream ASR results from microphone input.
-        
+
         Args:
             duration_seconds: Maximum duration to record (None for infinite)
-            
+
         Yields:
             dict: Same format as stream_from_file()
-            
-        Note:
-            This is a placeholder - real microphone streaming would require
-            additional audio capture libraries like sounddevice or pyaudio.
         """
-        raise NotImplementedError(
-            "Microphone streaming not implemented yet. "
-            "This would require additional audio capture dependencies."
-        )
+        self._ensure_engine_initialized()
+        samplerate = 16000
+        chunk_size = self.chunk_size_ms
+        chunk_size_samples = int(samplerate * chunk_size / 1000.0)
+        if self.debug:
+            print(
+                f"{symbols['wave']} [StreamingASR] Starting microphone stream at {samplerate}Hz, chunk size: {chunk_size}ms ({chunk_size_samples} samples)")
+        self.engine.reset_state()
+        start_time = time.time()
+        buffer = np.zeros((0,), dtype=np.float32)
+        chunk_id = 0
+
+        def callback(indata, frames, time_info, status):
+            nonlocal buffer
+            if status:
+                print(status, file=sys.stderr)
+            buffer = np.concatenate((buffer, indata[:, 0]))
+
+        with sd.InputStream(samplerate=samplerate, channels=1, dtype='float32', callback=callback):
+            while True:
+                if duration_seconds is not None and (time.time() - start_time) > duration_seconds:
+                    is_last = True
+                else:
+                    is_last = False
+                if len(buffer) >= chunk_size_samples or is_last:
+                    chunk = buffer[:chunk_size_samples]
+                    buffer = buffer[chunk_size_samples:]
+                    if len(chunk) == 0:
+                        if is_last:
+                            break
+                        else:
+                            time.sleep(0.01)
+                            continue
+                    chunk_id += 1
+                    if self.debug:
+                        print(
+                            f"{symbols['tool']} [StreamingASR] Processing mic chunk {chunk_id} ({len(chunk)} samples)")
+                    result = self.engine.process_audio(chunk, is_last=is_last)
+                    chunk_info = {
+                        'chunk_id': chunk_id,
+                        'samples': len(chunk),
+                        'duration_ms': len(chunk) / samplerate * 1000,
+                        'is_last': is_last
+                    }
+                    if result.get('current_transcription'):
+                        yield {
+                            'partial': True,
+                            'final': False,
+                            'text': result['current_transcription'],
+                            'chunk_info': chunk_info
+                        }
+                    if result.get('new_final_text'):
+                        yield {
+                            'partial': False,
+                            'final': True,
+                            'text': result['new_final_text'],
+                            'chunk_info': chunk_info
+                        }
+                    if is_last:
+                        break
+                else:
+                    time.sleep(0.01)
+        if self.debug:
+            print(f"{symbols['check']} [StreamingASR] Microphone streaming complete.")
     
     def _load_audio_file(self, audio_file: str) -> Optional[Dict[str, Any]]:
         """Load and prepare audio file for ASR processing."""
